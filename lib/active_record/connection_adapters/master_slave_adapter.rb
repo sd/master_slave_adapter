@@ -118,16 +118,24 @@ module ActiveRecord
         result
       end
       
-      delegate :select, :select_all, :select_one, :select_value, :select_values, :columns, 
-        :to => :current
+      methods_to_delegate_to_current = ["select", "select_all", "select_one", "select_value", "select_values", "columns"]
 
-      delegate :execute, :insert, :insert_sql, :update, :delete,
-        :to => :master
+      methods_to_delegate_to_master = []
+      methods_to_delegate_to_master += ActiveRecord::ConnectionAdapters::Quoting.instance_methods(false)
+      methods_to_delegate_to_master += ActiveRecord::ConnectionAdapters::SchemaStatements.instance_methods(false)
+      methods_to_delegate_to_master += ActiveRecord::ConnectionAdapters::DatabaseStatements.instance_methods(false)
+      methods_to_delegate_to_master += ActiveRecord::ConnectionAdapters::AbstractAdapter.instance_methods(false)
+
+      methods_to_delegate_to_master -= methods_to_delegate_to_current
+      methods_to_delegate_to_master -= MasterSlaveAdapter.instance_methods(false)
+
+      delegate(*(methods_to_delegate_to_current.compact.uniq + [{:to => :current}]))
+      delegate(*(methods_to_delegate_to_master.compact.uniq + [{:to => :master}]))
       
       def method_missing(method, *args, &block)
+        # with all the dynamic method delegation above, we should not have to reach this point, but just in case...
         master.send(method, *args, &block)
       end
-
     end
   end
   
