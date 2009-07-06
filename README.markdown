@@ -39,7 +39,10 @@ TheModel.with_slave do
   ...
 end
 
-By default, 
+
+Credits
+=======
+A lot of inspiration and understanding of the problem came from Rick Olsen's Masochism.
   
 -------------------------------------------------------------------------------
 Copyright (c) 2009 Sebastian Delmont <sd@notso.net> 
