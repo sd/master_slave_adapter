@@ -15,9 +15,11 @@ end
 # RAILS_ENV = 'test'
 
 MASTER_DB = File.expand_path(File.join(File.dirname(__FILE__), "master_slave.sqlite3"))
-SLAVE_DB = File.expand_path(File.join(File.dirname(__FILE__), "test_slave.sqlite3"))
+SLAVE0_DB = File.expand_path(File.join(File.dirname(__FILE__), "test_slave0.sqlite3"))
+SLAVE1_DB = File.expand_path(File.join(File.dirname(__FILE__), "test_slave1.sqlite3"))
 FileUtils.rm_f(MASTER_DB)
-FileUtils.rm_f(SLAVE_DB)
+FileUtils.rm_f(SLAVE0_DB)
+FileUtils.rm_f(SLAVE1_DB)
 
 require 'active_record'
 ActiveRecord::Base.logger = Logger.new(STDOUT)
@@ -30,32 +32,41 @@ ActiveRecord::Base.configurations = {
     :master => {
       :database => MASTER_DB
     },
-    :slave => {
-      :database => SLAVE_DB
-    },
+    :slaves => [
+      {
+        :database => SLAVE0_DB
+      },
+      {
+        :database => SLAVE1_DB
+      },
+    ],
   },
-  
+
   "direct_master" => {
     :adapter => "sqlite3",
     :database => MASTER_DB
   },
-  "direct_slave" => {
+  "direct_slave0" => {
     :adapter => "sqlite3",
-    :database => SLAVE_DB
+    :database => SLAVE0_DB
+  },
+  "direct_slave1" => {
+    :adapter => "sqlite3",
+    :database => SLAVE1_DB
   }
 }
 
 $: << File.expand_path(File.join(File.dirname(__FILE__), "../lib"))
 require File.expand_path(File.join(File.dirname(__FILE__), "..", "init.rb"))
 
-FileUtils.rm_f(MASTER_DB)
-FileUtils.rm_f(SLAVE_DB)
-
 class DirectMaster < ActiveRecord::Base
   establish_connection :direct_master
 end
-class DirectSlave < ActiveRecord::Base
-  establish_connection :direct_slave
+class DirectSlave0 < ActiveRecord::Base
+  establish_connection :direct_slave0
+end
+class DirectSlave1 < ActiveRecord::Base
+  establish_connection :direct_slave1
 end
 class SampleModel < ActiveRecord::Base
 end
@@ -65,11 +76,19 @@ DirectMaster.connection.execute('CREATE TABLE sample_models (id integer primary 
 DirectMaster.connection.execute('INSERT INTO sample_models (id, value) VALUES (1, "one - in both")')
 DirectMaster.connection.execute('INSERT INTO sample_models (id, value) VALUES (2, "two - only in master")')
 DirectMaster.connection.execute('INSERT INTO sample_models (id, value) VALUES (4, "four - in both")')
+DirectMaster.connection.execute('INSERT INTO sample_models (id, value) VALUES (5, "five - master")')
 
-DirectSlave.connection.execute('CREATE TABLE sample_models (id integer primary key autoincrement, value varchar(16))')
-DirectSlave.connection.execute('INSERT INTO sample_models (id, value) VALUES (1, "one - in both")')
-DirectSlave.connection.execute('INSERT INTO sample_models (id, value) VALUES (3, "three - only in slave")')
-DirectSlave.connection.execute('INSERT INTO sample_models (id, value) VALUES (4, "four - in both")')
+DirectSlave0.connection.execute('CREATE TABLE sample_models (id integer primary key autoincrement, value varchar(16))')
+DirectSlave0.connection.execute('INSERT INTO sample_models (id, value) VALUES (1, "one - in both")')
+DirectSlave0.connection.execute('INSERT INTO sample_models (id, value) VALUES (3, "three - only in slave")')
+DirectSlave0.connection.execute('INSERT INTO sample_models (id, value) VALUES (4, "four - in both")')
+DirectSlave0.connection.execute('INSERT INTO sample_models (id, value) VALUES (5, "five - slave 0")')
+
+DirectSlave1.connection.execute('CREATE TABLE sample_models (id integer primary key autoincrement, value varchar(16))')
+DirectSlave1.connection.execute('INSERT INTO sample_models (id, value) VALUES (1, "one - in both")')
+DirectSlave1.connection.execute('INSERT INTO sample_models (id, value) VALUES (3, "three - only in slave")')
+DirectSlave1.connection.execute('INSERT INTO sample_models (id, value) VALUES (4, "four - in both")')
+DirectSlave1.connection.execute('INSERT INTO sample_models (id, value) VALUES (5, "five - slave 1")')
 
 
 class MasterSlaveAdapterTest < Test::Unit::TestCase
@@ -98,6 +117,19 @@ class MasterSlaveAdapterTest < Test::Unit::TestCase
     end
   end
 
+  def test_randomized_slaves
+    counts = Hash.new {|h, k| h[k] = 0}
+    20.times do
+      SampleModel.with_slave do
+        counts[SampleModel.find(5).value] += 1
+      end
+    end
+      
+    assert (counts["five - master"] == 0)
+    assert (counts["five - slave 0"] > 0)
+    assert (counts["five - slave 1"] > 0)
+  end
+  
   def test_insert
     new_record = SampleModel.create(:value => "new record")
     assert_equal SampleModel.with_master { SampleModel.find(new_record.id) }, new_record

@@ -1,11 +1,6 @@
 require 'active_record/connection_adapters/abstract_adapter'
 
 module MasterSlave
-  class Master < ActiveRecord::Base
-  end
-  
-  class Slave < ActiveRecord::Base
-  end
 end
 
 module ActiveRecord
@@ -21,12 +16,14 @@ module ActiveRecord
       end
 
       if config.has_key?(:slave)
-        slave_config = config[:slave].merge(:adapter => config[:real_adapter])
+        slave_configs = [config[:slave].merge(:adapter => config[:real_adapter])]
+      elsif config.has_key?(:slaves)
+        slave_configs = config[:slaves].collect {|c| c.merge(:adapter => config[:real_adapter])}
       else
         raise ArgumentError, "No slave database configuration specified."
       end
 
-      ConnectionAdapters::MasterSlaveAdapter.new(logger, config, master_config, slave_config)
+      ConnectionAdapters::MasterSlaveAdapter.new(logger, config, master_config, slave_configs)
     end
     
     def self.with_master(*args, &block)
@@ -60,17 +57,31 @@ module ActiveRecord
       attr_accessor :slave
       attr_accessor :current
       
-      def initialize(logger, config, master_config, slave_config)
+      def initialize(logger, config, master_config, slave_configs)
         super(nil, logger)
 
+        MasterSlave.class_eval <<-ENDEVAL
+          class Master < ActiveRecord::Base
+          end
+        ENDEVAL
         MasterSlave::Master.establish_connection(master_config)
-        MasterSlave::Slave.establish_connection(slave_config)
         @master  = MasterSlave::Master.connection
-        @slave   = MasterSlave::Slave.connection
+
+        @slaves = []
+        slave_configs.each_with_index do |slave_config, i|
+          MasterSlave.class_eval <<-ENDEVAL
+            class Slave#{i} < ActiveRecord::Base
+            end
+          ENDEVAL
+          klass = eval "MasterSlave::Slave#{i}"
+          klass.establish_connection(slave_config)
+          @slaves << klass.connection
+        end
+        
         if (config[:default] and config[:default].to_s.downcase == "master")
           @current = @master
         else
-          @current = @slave
+          @current = @slaves[rand(@slaves.size)]
         end
       end
       
@@ -79,25 +90,23 @@ module ActiveRecord
       end
       
       def active?
-        @master.active? and @slave.active?
+        not_ok = ([@master] + @slaves).collect {|db| db.active?}.reject {|ok| ok}
+        !not_ok.any?
       end
 
       def reconnect!
-        result_master = @master.reconnect!
-        result_slave = @slave.reconnect!
-        result_master && result_slave
+        not_ok = ([@master] + @slaves).collect {|db| db.reconnect!}.reject {|ok| ok}
+        !not_ok.any?
       end
 
       def disconnect!
-        result_master = @master.disconnect!
-        result_slave = @slave.disconnect!
-        result_master && result_slave
+        not_ok = ([@master] + @slaves).collect {|db| db.disconnect!}.reject {|ok| ok}
+        !not_ok.any?
       end
 
       def reset!
-        result_master = @master.reset!
-        result_slave = @slave.reset!
-        result_master && result_slave
+        not_ok = ([@master] + @slaves).collect {|db| db.reset!}.reject {|ok| ok}
+        !not_ok.any?
       end
           
       def with_master
@@ -110,9 +119,10 @@ module ActiveRecord
       end
 
       def with_slave
-        @logger.info "Switching to Slave"
+        i = rand(@slaves.size)
+        @logger.info "Switching to Slave #{i}"
         original = @current
-        @current = @slave
+        @current = @slaves[i]
         result = yield
         @current = original
         result
