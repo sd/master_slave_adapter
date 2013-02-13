@@ -17,9 +17,14 @@ end
 MASTER_DB = File.expand_path(File.join(File.dirname(__FILE__), "master_slave.sqlite3"))
 SLAVE0_DB = File.expand_path(File.join(File.dirname(__FILE__), "test_slave0.sqlite3"))
 SLAVE1_DB = File.expand_path(File.join(File.dirname(__FILE__), "test_slave1.sqlite3"))
+ANOTHER_MASTER_DB = File.expand_path(File.join(File.dirname(__FILE__), "another_master.sqlite3"))
+ANOTHER_SLAVE_DB = File.expand_path(File.join(File.dirname(__FILE__), "another_slave.sqlite3"))
+
 FileUtils.rm_f(MASTER_DB)
 FileUtils.rm_f(SLAVE0_DB)
 FileUtils.rm_f(SLAVE1_DB)
+FileUtils.rm_f(ANOTHER_MASTER_DB)
+FileUtils.rm_f(ANOTHER_SLAVE_DB)
 
 require 'active_record'
 ActiveRecord::Base.logger = Logger.new(STDOUT)
@@ -53,7 +58,26 @@ ActiveRecord::Base.configurations = {
   "direct_slave1" => {
     :adapter => "sqlite3",
     :database => SLAVE1_DB
-  }
+  },
+
+  "another" => {
+    :adapter => "master_slave",
+    :real_adapter => "sqlite3",
+    :master => {
+      :database => ANOTHER_MASTER_DB
+    },
+    :slave => {
+      :database => ANOTHER_SLAVE_DB
+    },
+  },
+  "another_master" => {
+    :adapter => "sqlite3",
+    :database => ANOTHER_MASTER_DB
+  },
+  "another_slave" => {
+    :adapter => "sqlite3",
+    :database => ANOTHER_SLAVE_DB
+  },
 }
 
 $: << File.expand_path(File.join(File.dirname(__FILE__), "../lib"))
@@ -69,6 +93,15 @@ class DirectSlave1 < ActiveRecord::Base
   establish_connection :direct_slave1
 end
 class SampleModel < ActiveRecord::Base
+end
+class AnotherModel < ActiveRecord::Base
+  establish_connection :another
+end
+class DirectAnotherMaster < ActiveRecord::Base
+  establish_connection :another_master
+end
+class DirectAnotherSlave < ActiveRecord::Base
+  establish_connection :another_slave
 end
 ActiveRecord::Base.establish_connection :test
 
@@ -90,6 +123,13 @@ DirectSlave1.connection.execute('INSERT INTO sample_models (id, value) VALUES (3
 DirectSlave1.connection.execute('INSERT INTO sample_models (id, value) VALUES (4, "four - in both")')
 DirectSlave1.connection.execute('INSERT INTO sample_models (id, value) VALUES (5, "five - slave 1")')
 
+DirectAnotherMaster.connection.execute('CREATE TABLE another_models (id integer primary key autoincrement, value varchar(16))')
+DirectAnotherMaster.connection.execute('INSERT INTO another_models (id, value) VALUES (1, "one - another")')
+DirectAnotherMaster.connection.execute('INSERT INTO another_models (id, value) VALUES (2, "two - another")')
+
+DirectAnotherSlave.connection.execute('CREATE TABLE another_models (id integer primary key autoincrement, value varchar(16))')
+DirectAnotherSlave.connection.execute('INSERT INTO another_models (id, value) VALUES (1, "one - another")')
+DirectAnotherSlave.connection.execute('INSERT INTO another_models (id, value) VALUES (2, "two - another")')
 
 class MasterSlaveAdapterTest < Test::Unit::TestCase
   def test_read_from_current
@@ -135,5 +175,13 @@ class MasterSlaveAdapterTest < Test::Unit::TestCase
     assert_equal SampleModel.with_master { SampleModel.find(new_record.id) }, new_record
     assert_raises ActiveRecord::RecordNotFound do SampleModel.with_slave { SampleModel.find(new_record.id) } end
     assert_raises ActiveRecord::RecordNotFound do SampleModel.find(new_record.id) end
+  end
+
+  def test_read_from_two_different_master_slave_adapters
+    # there used to be a time when you could only use one master_slave adapter in your database configs, but not anymore
+    record1 = SampleModel.create(:value => "foo")
+    record2 = AnotherModel.create(:value => "bar")
+    assert_equal SampleModel.with_master { SampleModel.find(record1.id) }, record1
+    assert_equal AnotherModel.with_master { AnotherModel.find(record2.id) }, record2
   end
 end

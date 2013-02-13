@@ -60,22 +60,17 @@ module ActiveRecord
       def initialize(logger, config, master_config, slave_configs)
         super(nil, logger)
 
-        MasterSlave.class_eval <<-ENDEVAL
-          class Master < ActiveRecord::Base
-          end
-        ENDEVAL
-        MasterSlave::Master.establish_connection(master_config)
-        @master  = MasterSlave::Master.connection
+        # ActiveRecord's connection initialization code is all centered around class instance variables,
+        # so we need to create a couple of AR "model" classes to be able to connect to each database
+        master_klass = MasterSlaveAdapter.const_set(:"DUMMY_MASTER_#{object_id}", Class.new(ActiveRecord::Base))
+        master_klass.establish_connection(master_config)
+        @master  = master_klass.connection
 
         @slaves = []
         slave_configs.each_with_index do |slave_config, i|
-          MasterSlave.class_eval <<-ENDEVAL
-            class Slave#{i} < ActiveRecord::Base
-            end
-          ENDEVAL
-          klass = eval "MasterSlave::Slave#{i}"
-          klass.establish_connection(slave_config)
-          @slaves << klass.connection
+          slave_klass = MasterSlaveAdapter.const_set(:"DUMMY_SLAVE_#{i}_#{object_id}", Class.new(ActiveRecord::Base))
+          slave_klass.establish_connection(slave_config)
+          @slaves << slave_klass.connection
         end
         
         if (config[:default] and config[:default].to_s.downcase == "master")
@@ -90,7 +85,7 @@ module ActiveRecord
       end
       
       def active?
-        not_ok = ([@master] + @slaves).collect {|db| db.active?}.reject {|ok| ok}
+        not_ok = ([@master] + @slaves).collect {|db| !db.active?}.reject {|ok| ok}
         !not_ok.any?
       end
 
