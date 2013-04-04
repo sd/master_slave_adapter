@@ -1,0 +1,1 @@
+require 'active_record/connection_adapters/master_slave_adapter'
